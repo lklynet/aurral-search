@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { once } from "events";
 import Database from "better-sqlite3";
 import { getDataDir, loadEnvFile } from "../lib/paths.js";
 
@@ -27,25 +28,15 @@ function parseArgs(argv) {
   return args;
 }
 
-function writeLine(stream, line) {
-  return new Promise((resolve, reject) => {
-    const ok = stream.write(line, (error) => {
-      if (error) reject(error);
-    });
-    if (ok) {
-      resolve();
-    } else {
-      stream.once("drain", resolve);
-      stream.once("error", reject);
-    }
-  });
+async function writeLine(stream, line) {
+  if (!stream.write(line)) {
+    await once(stream, "drain");
+  }
 }
 
-function closeStream(stream) {
-  return new Promise((resolve, reject) => {
-    stream.end(() => resolve());
-    stream.once("error", reject);
-  });
+async function closeStream(stream) {
+  stream.end();
+  await once(stream, "finish");
 }
 
 function shouldSkip(outputPath, force, only) {
