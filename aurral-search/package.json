@@ -1,0 +1,22 @@
+{
+  "name": "aurral-search",
+  "version": "1.0.0",
+  "description": "Fast MusicBrainz canonical search API for Aurral",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build-index": "node scripts/build-index.mjs",
+    "export-jsonl": "node scripts/export-jsonl.mjs",
+    "bulk-import": "node scripts/bulk-import.mjs",
+    "reindex": "npm run build-index && npm run export-jsonl && npm run bulk-import",
+    "start": "node api/server.mjs",
+    "dev": "node --watch api/server.mjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.9.0",
+    "meilisearch": "^0.49.0"
+  }
+}

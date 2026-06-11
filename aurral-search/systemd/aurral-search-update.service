@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresh Aurral Search canonical index
+After=network.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/aurral-search
+ExecStart=/opt/aurral-search/update.sh
