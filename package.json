@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build-index": "node scripts/build-index.mjs",
-    "export-jsonl": "node scripts/export-jsonl.mjs",
+    "export-jsonl": "node --max-old-space-size=8192 scripts/export-jsonl.mjs",
     "bulk-import": "node scripts/bulk-import.mjs",
     "reindex": "npm run build-index && npm run export-jsonl && npm run bulk-import",
     "start": "node api/server.mjs",

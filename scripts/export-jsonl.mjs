@@ -5,37 +5,70 @@ import { getDataDir, loadEnvFile } from "../lib/paths.js";
 
 loadEnvFile();
 
+const EXPORT_TARGETS = ["artists", "releases", "recordings"];
+
 function log(message) {
   process.stdout.write(`${message}\n`);
 }
 
-function writeJsonl(stream, rows, mapRow) {
-  for (const row of rows) {
-    stream.write(`${JSON.stringify(mapRow(row))}\n`);
+function parseArgs(argv) {
+  const args = { only: null, force: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === "--only" && argv[index + 1]) {
+      args.only = argv[++index];
+    } else if (token === "--force") {
+      args.force = true;
+    }
   }
+  if (args.only && !EXPORT_TARGETS.includes(args.only)) {
+    throw new Error(`--only must be one of: ${EXPORT_TARGETS.join(", ")}`);
+  }
+  return args;
 }
 
-function main() {
-  const dataDir = getDataDir();
-  const stagingPath = path.join(dataDir, "staging", "index.db");
-  const outputDir = path.join(dataDir, "jsonl");
-  if (!fs.existsSync(stagingPath)) {
-    throw new Error(`Staging database not found: ${stagingPath}`);
+function writeLine(stream, line) {
+  return new Promise((resolve, reject) => {
+    const ok = stream.write(line, (error) => {
+      if (error) reject(error);
+    });
+    if (ok) {
+      resolve();
+    } else {
+      stream.once("drain", resolve);
+      stream.once("error", reject);
+    }
+  });
+}
+
+function closeStream(stream) {
+  return new Promise((resolve, reject) => {
+    stream.end(() => resolve());
+    stream.once("error", reject);
+  });
+}
+
+function shouldSkip(outputPath, force, only) {
+  if (force || only) return false;
+  return fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0;
+}
+
+async function exportArtists(db, outputPath, force, only) {
+  if (shouldSkip(outputPath, force, only)) {
+    log(`Skipping artists (already exists): ${outputPath}`);
+    return;
   }
 
-  fs.mkdirSync(outputDir, { recursive: true });
-  const db = new Database(stagingPath, { readonly: true });
-
   log("Exporting artists...");
-  const artistsPath = path.join(outputDir, "artists.jsonl");
-  const artistsStream = fs.createWriteStream(artistsPath);
-  const artists = db.prepare(`
+  const stream = fs.createWriteStream(outputPath);
+  const rows = db.prepare(`
     SELECT artist_mbid, name, sort_name
     FROM artist_staging
   `).iterate();
-  let artistCount = 0;
-  for (const row of artists) {
-    artistsStream.write(
+  let count = 0;
+  for (const row of rows) {
+    await writeLine(
+      stream,
       `${JSON.stringify({
         id: row.artist_mbid,
         name: row.name,
@@ -43,23 +76,30 @@ function main() {
         searchText: row.name,
       })}\n`,
     );
-    artistCount += 1;
-    if (artistCount % 250000 === 0) log(`  artists: ${artistCount.toLocaleString()}`);
+    count += 1;
+    if (count % 250000 === 0) log(`  artists: ${count.toLocaleString()}`);
   }
-  artistsStream.end();
-  log(`Exported ${artistCount.toLocaleString()} artists`);
+  await closeStream(stream);
+  log(`Exported ${count.toLocaleString()} artists`);
+}
+
+async function exportReleases(db, outputPath, force, only) {
+  if (shouldSkip(outputPath, force, only)) {
+    log(`Skipping releases (already exists): ${outputPath}`);
+    return;
+  }
 
   log("Exporting releases...");
-  const releasesPath = path.join(outputDir, "releases.jsonl");
-  const releasesStream = fs.createWriteStream(releasesPath);
-  const releases = db.prepare(`
+  const stream = fs.createWriteStream(outputPath);
+  const rows = db.prepare(`
     SELECT release_group_mbid, title, artist_name, artist_mbid
     FROM release_staging
   `).iterate();
-  let releaseCount = 0;
-  for (const row of releases) {
+  let count = 0;
+  for (const row of rows) {
     const artistName = row.artist_name || "Unknown Artist";
-    releasesStream.write(
+    await writeLine(
+      stream,
       `${JSON.stringify({
         id: row.release_group_mbid,
         title: row.title,
@@ -68,16 +108,22 @@ function main() {
         searchText: `${row.title} ${artistName}`.trim(),
       })}\n`,
     );
-    releaseCount += 1;
-    if (releaseCount % 250000 === 0) log(`  releases: ${releaseCount.toLocaleString()}`);
+    count += 1;
+    if (count % 250000 === 0) log(`  releases: ${count.toLocaleString()}`);
   }
-  releasesStream.end();
-  log(`Exported ${releaseCount.toLocaleString()} releases`);
+  await closeStream(stream);
+  log(`Exported ${count.toLocaleString()} releases`);
+}
+
+async function exportRecordings(db, outputPath, force, only) {
+  if (shouldSkip(outputPath, force, only)) {
+    log(`Skipping recordings (already exists): ${outputPath}`);
+    return;
+  }
 
   log("Exporting recordings...");
-  const recordingsPath = path.join(outputDir, "recordings.jsonl");
-  const recordingsStream = fs.createWriteStream(recordingsPath);
-  const recordings = db.prepare(`
+  const stream = fs.createWriteStream(outputPath);
+  const rows = db.prepare(`
     SELECT
       recording_mbid,
       recording_name,
@@ -89,10 +135,11 @@ function main() {
       score
     FROM track_staging
   `).iterate();
-  let recordingCount = 0;
-  for (const row of recordings) {
+  let count = 0;
+  for (const row of rows) {
     const artistName = row.artist_credit_name || "Unknown Artist";
-    recordingsStream.write(
+    await writeLine(
+      stream,
       `${JSON.stringify({
         id: row.recording_mbid,
         title: row.recording_name,
@@ -105,16 +152,58 @@ function main() {
         searchText: `${artistName} ${row.recording_name} ${row.release_name || ""}`.trim(),
       })}\n`,
     );
-    recordingCount += 1;
-    if (recordingCount % 500000 === 0) {
-      log(`  recordings: ${recordingCount.toLocaleString()}`);
+    count += 1;
+    if (count % 500000 === 0) {
+      log(`  recordings: ${count.toLocaleString()}`);
     }
   }
-  recordingsStream.end();
-  log(`Exported ${recordingCount.toLocaleString()} recordings`);
+  await closeStream(stream);
+  log(`Exported ${count.toLocaleString()} recordings`);
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const dataDir = getDataDir();
+  const stagingPath = path.join(dataDir, "staging", "index.db");
+  const outputDir = path.join(dataDir, "jsonl");
+  if (!fs.existsSync(stagingPath)) {
+    throw new Error(`Staging database not found: ${stagingPath}`);
+  }
+
+  fs.mkdirSync(outputDir, { recursive: true });
+  const db = new Database(stagingPath, { readonly: true });
+  const targets = args.only ? [args.only] : EXPORT_TARGETS;
+
+  if (targets.includes("artists")) {
+    await exportArtists(
+      db,
+      path.join(outputDir, "artists.jsonl"),
+      args.force,
+      args.only,
+    );
+  }
+  if (targets.includes("releases")) {
+    await exportReleases(
+      db,
+      path.join(outputDir, "releases.jsonl"),
+      args.force,
+      args.only,
+    );
+  }
+  if (targets.includes("recordings")) {
+    await exportRecordings(
+      db,
+      path.join(outputDir, "recordings.jsonl"),
+      args.force,
+      args.only,
+    );
+  }
 
   db.close();
   log("Done.");
 }
 
-main();
+main().catch((error) => {
+  process.stderr.write(`${error.stack || error.message}\n`);
+  process.exit(1);
+});
