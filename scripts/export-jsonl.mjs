@@ -53,7 +53,7 @@ async function exportArtists(db, outputPath, force, only) {
   log("Exporting artists...");
   const stream = fs.createWriteStream(outputPath);
   const rows = db.prepare(`
-    SELECT artist_mbid, name, sort_name
+    SELECT artist_mbid, name, sort_name, score
     FROM artist_staging
   `).iterate();
   let count = 0;
@@ -65,6 +65,7 @@ async function exportArtists(db, outputPath, force, only) {
         name: row.name,
         sortName: row.sort_name || row.name,
         searchText: row.name,
+        score: row.score || 0,
       })}\n`,
     );
     count += 1;

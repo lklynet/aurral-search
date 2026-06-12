@@ -2,6 +2,7 @@ import http from "http";
 import { URL } from "url";
 import { MeiliSearch } from "meilisearch";
 import { getNormalizedText, rankScore } from "../lib/ranking.js";
+import { dedupeArtistsByName, mergeRankedResults } from "../lib/dedupe.js";
 import { loadEnvFile } from "../lib/paths.js";
 
 loadEnvFile();
@@ -79,7 +80,7 @@ function mapArtist(hit, query) {
     sortName: hit.sortName || hit.name,
     inLibrary: false,
     hasMbid: true,
-  }, { text: hit.name });
+  }, { text: hit.name, canonicalScore: hit.score || 0 });
 }
 
 function mapAlbum(hit, query) {
@@ -138,10 +139,11 @@ async function searchCatalog(query, limit) {
     searchIndex("recordings", trimmed, limit),
   ]);
 
-  const artists = artistHits
-    .map((hit) => mapArtist(hit, trimmed))
-    .sort((left, right) => right.score - left.score)
-    .slice(0, limit);
+  const artists = dedupeArtistsByName(
+    artistHits
+      .map((hit) => mapArtist(hit, trimmed))
+      .sort((left, right) => right.score - left.score),
+  ).slice(0, limit);
 
   const albums = releaseHits
     .map((hit) => mapAlbum(hit, trimmed))
@@ -157,14 +159,15 @@ async function searchCatalog(query, limit) {
 }
 
 function pickTopResult(catalog) {
-  const candidates = [
-    ...(catalog?.tracks || []),
-    ...(catalog?.artists || []),
-    ...(catalog?.albums || []),
-  ]
-    .filter(Boolean)
-    .sort((left, right) => (right.score || 0) - (left.score || 0));
-  return candidates[0] || null;
+  const [top] = mergeRankedResults(
+    [
+      ...(catalog?.tracks || []),
+      ...(catalog?.artists || []),
+      ...(catalog?.albums || []),
+    ].filter(Boolean),
+    1,
+  );
+  return top || null;
 }
 
 async function buildSearchResponse(query, mode, limit) {

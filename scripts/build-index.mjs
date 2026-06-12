@@ -62,7 +62,8 @@ function createSchema(db) {
     CREATE TABLE artist_staging (
       artist_mbid TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      sort_name TEXT
+      sort_name TEXT,
+      score INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE release_staging (
@@ -141,8 +142,18 @@ async function importCanonicalRows(db, csvPath, limit) {
     WHERE excluded.score > track_staging.score
   `);
   const upsertArtist = db.prepare(`
-    INSERT OR IGNORE INTO artist_staging(artist_mbid, name, sort_name)
-    VALUES (?, ?, ?)
+    INSERT INTO artist_staging(artist_mbid, name, sort_name, score)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(artist_mbid) DO UPDATE SET
+      score = MAX(artist_staging.score, excluded.score),
+      name = CASE
+        WHEN excluded.score > artist_staging.score THEN excluded.name
+        ELSE artist_staging.name
+      END,
+      sort_name = CASE
+        WHEN excluded.score > artist_staging.score THEN excluded.sort_name
+        ELSE artist_staging.sort_name
+      END
   `);
   const upsertRelease = db.prepare(`
     INSERT OR IGNORE INTO release_staging(
@@ -222,7 +233,12 @@ async function importCanonicalRows(db, csvPath, limit) {
     kept += 1;
 
     if (row.artistMbid && row.artistCreditName) {
-      artistBatch.push([row.artistMbid, row.artistCreditName, row.artistCreditName]);
+      artistBatch.push([
+        row.artistMbid,
+        row.artistCreditName,
+        row.artistCreditName,
+        row.score,
+      ]);
     }
     if (releaseGroupMbid && row.releaseName) {
       releaseBatch.push([

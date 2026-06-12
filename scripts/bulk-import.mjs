@@ -10,8 +10,8 @@ const BATCH_SIZE = 50000;
 const INDEX_SETTINGS = {
   artists: {
     searchableAttributes: ["name", "sortName", "searchText"],
-    displayedAttributes: ["id", "name", "sortName"],
-    sortableAttributes: ["name"],
+    displayedAttributes: ["id", "name", "sortName", "score"],
+    sortableAttributes: ["score", "name"],
   },
   releases: {
     searchableAttributes: ["title", "artistName", "searchText"],
