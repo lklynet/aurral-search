@@ -64,7 +64,6 @@ async function exportArtists(db, outputPath, force, only) {
         id: row.artist_mbid,
         name: row.name,
         sortName: row.sort_name || row.name,
-        searchText: row.name,
         score: row.score || 0,
       })}\n`,
     );
@@ -84,7 +83,7 @@ async function exportReleases(db, outputPath, force, only) {
   log("Exporting releases...");
   const stream = fs.createWriteStream(outputPath);
   const rows = db.prepare(`
-    SELECT release_group_mbid, title, artist_name, artist_mbid
+    SELECT release_group_mbid, title, artist_name, artist_mbid, score
     FROM release_staging
   `).iterate();
   let count = 0;
@@ -97,7 +96,7 @@ async function exportReleases(db, outputPath, force, only) {
         title: row.title,
         artistName,
         artistMbid: row.artist_mbid || null,
-        searchText: `${row.title} ${artistName}`.trim(),
+        score: row.score || 0,
       })}\n`,
     );
     count += 1;
@@ -141,7 +140,6 @@ async function exportRecordings(db, outputPath, force, only) {
         albumMbid: row.release_group_mbid || null,
         combinedLookup: row.combined_lookup || "",
         score: row.score || 0,
-        searchText: `${artistName} ${row.recording_name} ${row.release_name || ""}`.trim(),
       })}\n`,
     );
     count += 1;

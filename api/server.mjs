@@ -1,15 +1,14 @@
 import http from "http";
 import { URL } from "url";
 import { MeiliSearch } from "meilisearch";
-import { getNormalizedText, rankScore } from "../lib/ranking.js";
 import { dedupeArtistsByName, mergeRankedResults } from "../lib/dedupe.js";
+import { prepareSearchQuery } from "../lib/query.js";
 import { loadEnvFile } from "../lib/paths.js";
 
 loadEnvFile();
 
 const SUGGEST_LIMIT = 5;
 const FULL_LIMIT = 20;
-const EXACT_MATCH_BOOST = 15;
 
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
@@ -61,17 +60,12 @@ function sendJson(res, statusCode, payload) {
   res.end(body);
 }
 
-function withScore(query, item, { text, boost = 0, canonicalScore = 0 } = {}) {
-  const target = text ?? item.name ?? item.title ?? "";
-  let score = rankScore(query, target, canonicalScore);
-  if (getNormalizedText(target) === getNormalizedText(query)) {
-    score += EXACT_MATCH_BOOST;
-  }
-  return { ...item, score: score + boost };
+function rankingScore(hit) {
+  return hit._rankingScore ?? 0;
 }
 
-function mapArtist(hit, query) {
-  return withScore(query, {
+function mapArtist(hit) {
+  return {
     type: "artist",
     source: "aurral-search",
     id: hit.id,
@@ -80,12 +74,13 @@ function mapArtist(hit, query) {
     sortName: hit.sortName || hit.name,
     inLibrary: false,
     hasMbid: true,
-  }, { text: hit.name, canonicalScore: hit.score || 0 });
+    score: rankingScore(hit),
+  };
 }
 
-function mapAlbum(hit, query) {
+function mapAlbum(hit) {
   const artistName = hit.artistName || "Unknown Artist";
-  return withScore(query, {
+  return {
     type: "album",
     source: "aurral-search",
     id: hit.id,
@@ -95,12 +90,13 @@ function mapAlbum(hit, query) {
     artistMbid: hit.artistMbid || null,
     inLibrary: false,
     hasMbid: true,
-  }, { text: `${artistName} ${hit.title}` });
+    score: rankingScore(hit),
+  };
 }
 
-function mapTrack(hit, query) {
+function mapTrack(hit) {
   const artistName = hit.artistName || "Unknown Artist";
-  return withScore(query, {
+  return {
     type: "track",
     source: "aurral-search",
     id: hit.id,
@@ -112,61 +108,52 @@ function mapTrack(hit, query) {
     albumMbid: hit.albumMbid || null,
     inLibrary: false,
     hasMbid: true,
-  }, {
-    text: `${artistName} ${hit.title} ${hit.albumTitle || ""}`,
-    canonicalScore: hit.score || 0,
-  });
+    score: rankingScore(hit),
+  };
 }
 
-async function searchIndex(indexName, query, limit) {
-  const index = client().index(indexName);
-  const response = await index.search(query, {
-    limit: Math.max(limit * 4, limit),
-    attributesToRetrieve: ["*"],
-  });
-  return response.hits || [];
-}
-
-async function searchCatalog(query, limit) {
-  const trimmed = String(query || "").trim();
+async function searchCatalog(query, limit, mode = "suggest") {
+  const trimmed = prepareSearchQuery(query);
   if (!trimmed) {
     return { artists: [], albums: [], tracks: [] };
   }
 
-  const [artistHits, releaseHits, recordingHits] = await Promise.all([
-    searchIndex("artists", trimmed, limit),
-    searchIndex("releases", trimmed, limit),
-    searchIndex("recordings", trimmed, limit),
-  ]);
+  const matchingStrategy = mode === "full" ? "all" : "last";
+  const searchOptions = {
+    q: trimmed,
+    limit,
+    showRankingScore: true,
+    matchingStrategy,
+  };
+
+  const response = await client().multiSearch({
+    queries: [
+      { indexUid: "artists", ...searchOptions },
+      { indexUid: "releases", ...searchOptions },
+      { indexUid: "recordings", ...searchOptions },
+    ],
+  });
+
+  const [artistResult, releaseResult, recordingResult] = response.results;
 
   const artists = dedupeArtistsByName(
-    artistHits
-      .map((hit) => mapArtist(hit, trimmed))
-      .sort((left, right) => right.score - left.score),
+    (artistResult.hits || []).map(mapArtist),
   ).slice(0, limit);
 
-  const albums = releaseHits
-    .map((hit) => mapAlbum(hit, trimmed))
-    .sort((left, right) => right.score - left.score)
-    .slice(0, limit);
-
-  const tracks = recordingHits
-    .map((hit) => mapTrack(hit, trimmed))
-    .sort((left, right) => right.score - left.score)
-    .slice(0, limit);
+  const albums = (releaseResult.hits || []).map(mapAlbum).slice(0, limit);
+  const tracks = (recordingResult.hits || []).map(mapTrack).slice(0, limit);
 
   return { artists, albums, tracks };
 }
 
 function pickTopResult(catalog) {
-  const [top] = mergeRankedResults(
-    [
-      ...(catalog?.tracks || []),
-      ...(catalog?.artists || []),
-      ...(catalog?.albums || []),
-    ].filter(Boolean),
-    1,
-  );
+  const ranked = [
+    ...(catalog?.tracks || []),
+    ...(catalog?.artists || []),
+    ...(catalog?.albums || []),
+  ].sort((left, right) => (right.score || 0) - (left.score || 0));
+
+  const [top] = mergeRankedResults(ranked, 1);
   return top || null;
 }
 
@@ -187,7 +174,7 @@ async function buildSearchResponse(query, mode, limit) {
     };
   }
 
-  const catalog = await searchCatalog(trimmed, perBucketLimit);
+  const catalog = await searchCatalog(trimmed, perBucketLimit, normalizedMode);
   return {
     query: trimmed,
     mode: normalizedMode,
@@ -253,7 +240,11 @@ async function handleRequest(req, res) {
       const mode = url.searchParams.get("mode") || "suggest";
       const limit = url.searchParams.get("limit");
       if (pathname === "/catalog") {
-        const catalog = await searchCatalog(query, bucketLimit(normalizeMode(mode), limit));
+        const catalog = await searchCatalog(
+          query,
+          bucketLimit(normalizeMode(mode), limit),
+          normalizeMode(mode),
+        );
         return sendJson(res, 200, { query: String(query).trim(), catalog });
       }
       return sendJson(

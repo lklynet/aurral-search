@@ -8,7 +8,7 @@ import { getDataDir, getDumpsDir, loadEnvFile } from "../lib/paths.js";
 loadEnvFile();
 
 const BATCH_SIZE = 5000;
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 function parseArgs(argv) {
   const args = {
@@ -70,7 +70,8 @@ function createSchema(db) {
       release_group_mbid TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       artist_name TEXT,
-      artist_mbid TEXT
+      artist_mbid TEXT,
+      score INTEGER NOT NULL DEFAULT 0
     );
   `);
 }
@@ -156,12 +157,27 @@ async function importCanonicalRows(db, csvPath, limit) {
       END
   `);
   const upsertRelease = db.prepare(`
-    INSERT OR IGNORE INTO release_staging(
+    INSERT INTO release_staging(
       release_group_mbid,
       title,
       artist_name,
-      artist_mbid
-    ) VALUES (?, ?, ?, ?)
+      artist_mbid,
+      score
+    ) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(release_group_mbid) DO UPDATE SET
+      score = MAX(release_staging.score, excluded.score),
+      title = CASE
+        WHEN excluded.score > release_staging.score THEN excluded.title
+        ELSE release_staging.title
+      END,
+      artist_name = CASE
+        WHEN excluded.score > release_staging.score THEN excluded.artist_name
+        ELSE release_staging.artist_name
+      END,
+      artist_mbid = CASE
+        WHEN excluded.score > release_staging.score THEN excluded.artist_mbid
+        ELSE release_staging.artist_mbid
+      END
   `);
 
   const stream = fs.createReadStream(csvPath, { encoding: "utf8" });
@@ -246,6 +262,7 @@ async function importCanonicalRows(db, csvPath, limit) {
         row.releaseName,
         row.artistCreditName || "Unknown Artist",
         row.artistMbid || "",
+        row.score,
       ]);
     }
 

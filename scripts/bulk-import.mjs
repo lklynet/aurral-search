@@ -7,25 +7,31 @@ import { getDataDir, loadEnvFile } from "../lib/paths.js";
 loadEnvFile();
 
 const BATCH_SIZE = 50000;
+const RANKING_RULES = [
+  "words",
+  "typo",
+  "proximity",
+  "attribute",
+  "sort",
+  "exactness",
+  "score:desc",
+];
+
 const INDEX_SETTINGS = {
   artists: {
-    searchableAttributes: ["name", "sortName", "searchText"],
+    searchableAttributes: ["name", "sortName"],
     displayedAttributes: ["id", "name", "sortName", "score"],
     sortableAttributes: ["score", "name"],
+    rankingRules: RANKING_RULES,
   },
   releases: {
-    searchableAttributes: ["title", "artistName", "searchText"],
-    displayedAttributes: ["id", "title", "artistName", "artistMbid"],
-    sortableAttributes: ["title"],
+    searchableAttributes: ["title", "artistName"],
+    displayedAttributes: ["id", "title", "artistName", "artistMbid", "score"],
+    sortableAttributes: ["score", "title"],
+    rankingRules: RANKING_RULES,
   },
   recordings: {
-    searchableAttributes: [
-      "title",
-      "artistName",
-      "albumTitle",
-      "combinedLookup",
-      "searchText",
-    ],
+    searchableAttributes: ["artistName", "title", "albumTitle", "combinedLookup"],
     displayedAttributes: [
       "id",
       "title",
@@ -36,6 +42,7 @@ const INDEX_SETTINGS = {
       "score",
     ],
     sortableAttributes: ["score", "title"],
+    rankingRules: RANKING_RULES,
   },
 };
 
