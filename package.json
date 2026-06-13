@@ -11,6 +11,7 @@
     "build-index": "node scripts/build-index.mjs",
     "export-jsonl": "node --max-old-space-size=8192 scripts/export-jsonl.mjs",
     "bulk-import": "node scripts/bulk-import.mjs",
+    "apply-settings": "node scripts/apply-settings.mjs",
     "reindex": "npm run build-index && npm run export-jsonl && npm run bulk-import",
     "start": "node api/server.mjs",
     "dev": "node --watch api/server.mjs"

@@ -1,8 +1,9 @@
 import http from "http";
 import { URL } from "url";
 import { MeiliSearch } from "meilisearch";
-import { dedupeArtistsByName, mergeRankedResults } from "../lib/dedupe.js";
+import { dedupeArtistsByName } from "../lib/dedupe.js";
 import { prepareSearchQuery } from "../lib/query.js";
+import { filterCatalog, pickTopResult } from "../lib/top.js";
 import { loadEnvFile } from "../lib/paths.js";
 
 loadEnvFile();
@@ -22,6 +23,10 @@ function normalizeMode(value) {
 function bucketLimit(mode, requestedLimit) {
   const fallback = mode === "full" ? FULL_LIMIT : SUGGEST_LIMIT;
   return Math.min(30, parsePositiveInt(requestedLimit, fallback));
+}
+
+function fetchLimit(limit) {
+  return Math.min(30, Math.max(limit * 3, limit));
 }
 
 function getMeiliClient() {
@@ -60,10 +65,6 @@ function sendJson(res, statusCode, payload) {
   res.end(body);
 }
 
-function rankingScore(hit) {
-  return hit._rankingScore ?? 0;
-}
-
 function mapArtist(hit) {
   return {
     type: "artist",
@@ -74,7 +75,8 @@ function mapArtist(hit) {
     sortName: hit.sortName || hit.name,
     inLibrary: false,
     hasMbid: true,
-    score: rankingScore(hit),
+    score: hit._rankingScore ?? 0,
+    popularity: hit.score || 0,
   };
 }
 
@@ -90,7 +92,21 @@ function mapAlbum(hit) {
     artistMbid: hit.artistMbid || null,
     inLibrary: false,
     hasMbid: true,
-    score: rankingScore(hit),
+    score: hit._rankingScore ?? 0,
+    popularity: hit.score || 0,
+  };
+}
+
+function toPublicItem(item) {
+  const { popularity, ...publicItem } = item;
+  return publicItem;
+}
+
+function toPublicCatalog(catalog) {
+  return {
+    artists: (catalog.artists || []).map(toPublicItem),
+    albums: (catalog.albums || []).map(toPublicItem),
+    tracks: (catalog.tracks || []).map(toPublicItem),
   };
 }
 
@@ -108,20 +124,22 @@ function mapTrack(hit) {
     albumMbid: hit.albumMbid || null,
     inLibrary: false,
     hasMbid: true,
-    score: rankingScore(hit),
+    score: hit._rankingScore ?? 0,
+    popularity: hit.score || 0,
   };
 }
 
-async function searchCatalog(query, limit, mode = "suggest") {
+async function searchCatalog(query, limit, mode = "suggest", { publicItems = true } = {}) {
   const trimmed = prepareSearchQuery(query);
   if (!trimmed) {
     return { artists: [], albums: [], tracks: [] };
   }
 
+  const perIndexLimit = fetchLimit(limit);
   const matchingStrategy = mode === "full" ? "all" : "last";
   const searchOptions = {
     q: trimmed,
-    limit,
+    limit: perIndexLimit,
     showRankingScore: true,
     matchingStrategy,
   };
@@ -136,25 +154,19 @@ async function searchCatalog(query, limit, mode = "suggest") {
 
   const [artistResult, releaseResult, recordingResult] = response.results;
 
-  const artists = dedupeArtistsByName(
-    (artistResult.hits || []).map(mapArtist),
-  ).slice(0, limit);
+  const raw = {
+    artists: dedupeArtistsByName((artistResult.hits || []).map(mapArtist)),
+    albums: (releaseResult.hits || []).map(mapAlbum),
+    tracks: (recordingResult.hits || []).map(mapTrack),
+  };
 
-  const albums = (releaseResult.hits || []).map(mapAlbum).slice(0, limit);
-  const tracks = (recordingResult.hits || []).map(mapTrack).slice(0, limit);
-
-  return { artists, albums, tracks };
-}
-
-function pickTopResult(catalog) {
-  const ranked = [
-    ...(catalog?.tracks || []),
-    ...(catalog?.artists || []),
-    ...(catalog?.albums || []),
-  ].sort((left, right) => (right.score || 0) - (left.score || 0));
-
-  const [top] = mergeRankedResults(ranked, 1);
-  return top || null;
+  const filtered = filterCatalog(trimmed, raw);
+  const catalog = {
+    artists: filtered.artists.slice(0, limit),
+    albums: filtered.albums.slice(0, limit),
+    tracks: filtered.tracks.slice(0, limit),
+  };
+  return publicItems ? toPublicCatalog(catalog) : catalog;
 }
 
 async function buildSearchResponse(query, mode, limit) {
@@ -174,13 +186,16 @@ async function buildSearchResponse(query, mode, limit) {
     };
   }
 
-  const catalog = await searchCatalog(trimmed, perBucketLimit, normalizedMode);
+  const catalog = await searchCatalog(trimmed, perBucketLimit, normalizedMode, {
+    publicItems: false,
+  });
+  const top = pickTopResult(trimmed, catalog);
   return {
     query: trimmed,
     mode: normalizedMode,
-    top: pickTopResult(catalog),
+    top: top ? toPublicItem(top) : null,
     library: { artists: [], tracks: [], playlists: [] },
-    catalog,
+    catalog: toPublicCatalog(catalog),
     localSearchConfigured: true,
     filters: ["all", "artists", "albums", "tracks", "library", "playlists"],
   };

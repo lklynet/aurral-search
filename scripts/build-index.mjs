@@ -3,12 +3,13 @@ import path from "path";
 import readline from "readline";
 import Database from "better-sqlite3";
 import { ensureCanonicalFiles, parseCanonicalRow } from "../lib/canonical.js";
+import { isNoiseRelease } from "../lib/match.js";
 import { getDataDir, getDumpsDir, loadEnvFile } from "../lib/paths.js";
 
 loadEnvFile();
 
 const BATCH_SIZE = 5000;
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 function parseArgs(argv) {
   const args = {
@@ -257,6 +258,8 @@ async function importCanonicalRows(db, csvPath, limit) {
       ]);
     }
     if (releaseGroupMbid && row.releaseName) {
+      const artistName = row.artistCreditName || "Unknown Artist";
+      if (isNoiseRelease(row.releaseName, artistName, row.score)) continue;
       releaseBatch.push([
         releaseGroupMbid,
         row.releaseName,
